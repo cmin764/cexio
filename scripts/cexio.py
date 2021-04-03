@@ -19,10 +19,10 @@ DATE_YESTERDAY = (
 
 URL_OHLCV = "https://cex.io/api/ohlcv/hd/{date}/{symbol1}/{symbol2}"
 
-DEFAULT_PAIRS = ["USD", "BTC", "ETH"]
-FIAT = ["USD"]
+DEFAULT_PAIRS = ["USD", "BTC", "ETH", "EUR"]
+FIAT = ["USD", "EUR"]
 DIMS = [[1], [4], [2, 3]]
-MIN_WIN = 0.03  # x% minimum win threshold
+MIN_WIN = 0.04  # x% minimum win threshold
 
 
 def _get_ohlcv(date, pair, is_reversed=False):
@@ -34,7 +34,7 @@ def _get_ohlcv(date, pair, is_reversed=False):
 
     if not data:
         if is_reversed:
-            raise Exception("this pair isn't available for history: {}".format(pair))
+            raise Exception(f"this pair isn't available for history: {pair}")
         return _get_ohlcv(date, list(reversed(pair)), is_reversed=True)
 
     return pair, json.loads(data["data1m"])
@@ -45,6 +45,9 @@ def download_history(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS):
     for diff in range(days):
         crt_date = start_date + datetime.timedelta(days=diff)
         for pair in itertools.combinations(pairs, 2):
+            if len(set(pair) - set(FIAT)) == 0:
+                continue
+
             pair, data = _get_ohlcv(crt_date, sorted(pair))
             date_str = crt_date.strftime(DATE_TEMPLATE)
             fname = "{}_{}_{}.json".format(
@@ -63,10 +66,10 @@ def _get_factor(ohlcv, dimensions):
     return sum(ohlcv[dim] for dim in dimensions) / len(dimensions)
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def _open_pair(crt_date, first, second, reverse=False):
     fname = f"{crt_date}_{first}_{second}.json"
-    print(f"Trying to open {fname}...")
+    # print(f"Trying to open {fname}...")
     if os.path.isfile(fname):
         with open(fname) as stream:
             data = json.load(stream)
@@ -76,12 +79,11 @@ def _open_pair(crt_date, first, second, reverse=False):
             return {"reverse": reverse, "data": data, "min_date": min_date, "max_date": max_date}
 
     if reverse is True:
-        raise Exception("pair {first}/{second} not found at all")
+        raise Exception(f"pair {first}/{second} for {crt_date} not found at all")
     return _open_pair(crt_date, second, first, reverse=True)
 
 
 def find_margins(cur_chain, crt_date_str, min_win=MIN_WIN):
-    print(f"Configuration: {crt_date_str} {cur_chain}")
     if not isinstance(cur_chain, list):
         cur_chain = cur_chain.split()
     assert len(cur_chain) > 3
@@ -90,8 +92,8 @@ def find_margins(cur_chain, crt_date_str, min_win=MIN_WIN):
     for time_idx in range(len(cur_chain) - 1):
         tran_chain.append(_open_pair(crt_date_str, *cur_chain[time_idx:time_idx + 2]))
 
-    start_time = max([item["data"]["min_date"] for item in tran_chain])
-    end_time = min([item["data"]["max_date"] for item in tran_chain])
+    start_time = max([item["min_date"] for item in tran_chain])
+    end_time = min([item["max_date"] for item in tran_chain])
     max_ts = min([len(item["data"]) for item in tran_chain])
 
     wins = []
@@ -113,14 +115,26 @@ def find_margins(cur_chain, crt_date_str, min_win=MIN_WIN):
             if max_win - 1.0 > min_win:
                 wins.append((time_idx, max_win, max_win_dims))
 
-    print("Timestamps/potential: ", ts, max_ts)
-    print("Wins: ", wins)
     if wins:
-        print("Max win: ", max(wins, key=lambda win: win[1]))
+        max_win = max(wins, key=lambda win: win[1])
+        print(f"Configuration: {crt_date_str} {cur_chain}")
+        print(f"Analyzed timestamps of total: {ts}/{max_ts}")
+        print("Wins: ", wins)
+        print("Max win: ", max_win)
+        print("=" * 30 + "\n")
+        return max_win
+
+    return None
 
 
-def find_all_margins(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS):
+def find_all_margins(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS, download=True):
+    if download:
+        download_history(start=start, days=days, pairs=pairs)
+
+    crypto = set(pairs) - set(FIAT)
     start_date = datetime.datetime.strptime(str(start), DATE_TEMPLATE)
+    max_win = None
+    max_chain = None
     for diff in range(days):
         crt_date = start_date + datetime.timedelta(days=diff)
         crt_date_str = crt_date.strftime(DATE_TEMPLATE)
@@ -128,11 +142,19 @@ def find_all_margins(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS):
             if begin not in FIAT:
                 continue
 
-            crypto = set(pairs) - {begin}
             for length in range(2, len(pairs)):
                 for inner_tran in itertools.permutations(crypto, length):
                     cur_chain = [begin] + list(inner_tran) + [begin]
-                    find_margins(cur_chain, crt_date_str)
+                    ret_win = find_margins(cur_chain, crt_date_str)
+                    if ret_win:
+                        max_win = max_win or ret_win
+                        max_chain = max_chain or cur_chain
+                        if ret_win[1] > max_win[1]:
+                            max_win = ret_win
+                            max_chain = cur_chain
+
+    print("Global max win: ", max_win)
+    print("Global max config: ", max_chain)
 
 
 if __name__ == "__main__":
