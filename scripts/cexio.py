@@ -23,6 +23,7 @@ DEFAULT_PAIRS = ["USD", "BTC", "ETH", "EUR"]
 FIAT = ["USD", "EUR"]
 DIMS = [[1], [4], [2, 3]]
 MIN_WIN = 0.04  # x% minimum win threshold
+HISTORY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "history"))
 
 
 def _get_ohlcv(date, pair, is_reversed=False):
@@ -53,7 +54,8 @@ def download_history(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS):
             fname = "{}_{}_{}.json".format(
                 date_str, pair[0], pair[1]
             )
-            with open(fname, "w") as stream:
+            fpath = os.path.join(HISTORY_DIR, fname)
+            with open(fpath, "w") as stream:
                 print(f"Dumping on {date_str} {pair[0]}/{pair[1]}: {len(data)} timestamps")
                 json.dump(data, stream)
 
@@ -69,9 +71,10 @@ def _get_factor(ohlcv, dimensions):
 @functools.lru_cache(maxsize=None)
 def _open_pair(crt_date, first, second, reverse=False):
     fname = f"{crt_date}_{first}_{second}.json"
-    # print(f"Trying to open {fname}...")
-    if os.path.isfile(fname):
-        with open(fname) as stream:
+    fpath = os.path.join(HISTORY_DIR, fname)
+
+    if os.path.isfile(fpath):
+        with open(fpath) as stream:
             data = json.load(stream)
             min_date = data[0][0]
             max_date = data[-1][0]
@@ -158,4 +161,5 @@ def find_all_margins(start=DATE_YESTERDAY, days=1, pairs=DEFAULT_PAIRS, download
 
 
 if __name__ == "__main__":
+    os.makedirs(HISTORY_DIR, exist_ok=True)
     fire.Fire()
